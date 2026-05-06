@@ -150,6 +150,7 @@ def dashboard_stats():
 
 @api.route("/users", methods=["GET"])
 @jwt_required()
+# @admin_required
 def get_users():
     """All authenticated users can list users."""
     users = User.query.order_by(User.created_at.desc()).all()

@@ -6,6 +6,8 @@ from flask_jwt_extended import (
     get_jwt_identity,
 )
 
+from db import *
+
 
 def role_required(*roles):
     """Decorator: restrict endpoint to users with one of the given roles."""
