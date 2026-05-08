@@ -124,7 +124,7 @@ class Log(db.Model):
         return {
             "id": self.id,
             "message": self.message,
-            "user_id": self.user_id,
+            "user": self.user.username,
             "log_level": self.log_level,
             "created_at": self.created_at,
         }

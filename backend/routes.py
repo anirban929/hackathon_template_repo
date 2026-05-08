@@ -49,12 +49,12 @@ def missing_token_callback(error):
 @jwt_required()
 def get_roles():
     roles = Role.query.all()
-    identity = get_jwt_identity()
-    user = User.query.get(identity)
+    user = User.query.get(get_jwt_identity())
     Log.info(
-        f"""User {user.username} has the following roles:
+        f"""All available roles:
 {"\n".join([r.name for r in roles])}
-        """
+        """,
+        user.id,
     )
     return jsonify([r.to_dict() for r in roles])
 
@@ -99,6 +99,8 @@ def login():
     )
     refresh_token = create_refresh_token(identity=str(user.id))
 
+    Log.info(f"New Access/Refresh token generated for user `{user.username}`", user.id)
+
     return jsonify(
         {
             "access_token": access_token,
@@ -111,8 +113,7 @@ def login():
 @api.route("/auth/refresh", methods=["POST"])
 @jwt_required(refresh=True)
 def refresh():
-    identity = get_jwt_identity()
-    user = User.query.get(identity)
+    user = User.query.get(get_jwt_identity())
     if not user:
         return jsonify({"error": "User not found"}), 404
 
@@ -123,17 +124,24 @@ def refresh():
 
     additional_claims = {"roles": role_names, "username": user.username}
     access_token = create_access_token(
-        identity=identity, additional_claims=additional_claims
+        identity=str(user.id), additional_claims=additional_claims
     )
+
+    Log.info(f"New Refresh token generated for user `{user.username}`", user.id)
+
     return jsonify({"access_token": access_token})
 
 
 @api.route("/auth/logout", methods=["DELETE"])
 @jwt_required()
 def logout():
+    user = User.query.get(get_jwt_identity())
     jti = get_jwt()["jti"]
     db.session.add(TokenBlocklist(jti=jti))
     db.session.commit()
+
+    Log.info(f"User `{user.username}` logged out", user.id)
+
     return jsonify({"message": "Successfully logged out"})
 
 
@@ -143,16 +151,34 @@ def me():
     user = User.query.get(get_jwt_identity())
     if not user:
         return jsonify({"error": "User not found"}), 404
+
+    Log.info(
+        f"Profile details fetched for user `{user.username}`",
+        user.id,
+    )
     return jsonify(user.to_dict())
 
 
 @api.route("/dashboard/stats", methods=["GET"])
 @jwt_required()
 def dashboard_stats():
+    user = User.query.get(get_jwt_identity())
     total_users = User.query.count()
     active_users = User.query.filter_by(is_active=True).count()
-    admin_count = User.query.join(Role).filter(Role.name == "Admin").count()
-    viewer_count = User.query.join(Role).filter(Role.name == "Viewer").count()
+    admin_count = User.query.join(User.roles).filter(Role.name == "Admin").count()
+    viewer_count = User.query.join(User.roles).filter(Role.name == "Viewer").count()
+
+    Log.info(
+        f"""
+Dashboard Stats fetched:
+Total users: {total_users}
+Active users: {active_users}
+Inactive users: {total_users - active_users}
+Admin count: {admin_count}
+Viewer count: {viewer_count}
+""",
+        user.id,
+    )
     return jsonify(
         {
             "total_users": total_users,
@@ -166,16 +192,19 @@ def dashboard_stats():
 
 @api.route("/users", methods=["GET"])
 @jwt_required()
-# @admin_required
 def get_users():
     """All authenticated users can list users."""
+    current_user = User.query.get(get_jwt_identity())
     users = User.query.order_by(User.created_at.desc()).all()
+    Log.info(f"All user details are fetched by user `{current_user.username}`")
     return jsonify([u.to_dict() for u in users])
 
 
 @api.route("/users", methods=["POST"])
+@jwt_required()
 @admin_required
 def create_user():
+    current_user = User.query.get(get_jwt_identity())
     data = request.get_json(silent=True) or {}
     required = ["username", "email", "password", "role"]
     missing = [f for f in required if not data.get(f)]
@@ -191,57 +220,78 @@ def create_user():
     if User.query.filter_by(email=data["email"]).first():
         return jsonify({"error": "Email already registered"}), 409
 
-    user = User(username=data["username"], email=data["email"], role=role)
+    user = User(username=data["username"], email=data["email"], roles=[role])
     user.set_password(data["password"])
     db.session.add(user)
     db.session.commit()
+
+    # new_user = User.query.filter_by(username=data["username"]).first()
+    Log.info(
+        f"New user `{user.username}` created with following roles: {', '.join([role.name for role in user.roles])}",
+        current_user.id,
+    )
     return jsonify(user.to_dict()), 201
 
 
 @api.route("/users/<int:user_id>", methods=["GET"])
 @jwt_required()
 def get_user(user_id):
+    current_user = User.query.get(get_jwt_identity())
     user = User.query.get_or_404(user_id)
+    Log.info(f"User details fetched for user `{user.username}`", current_user.id)
     return jsonify(user.to_dict())
 
 
 @api.route("/users/<int:user_id>", methods=["PUT"])
+@jwt_required()
 @admin_required
 def update_user(user_id):
+    current_user = User.query.get(get_jwt_identity())
     user = User.query.get_or_404(user_id)
     data = request.get_json(silent=True) or {}
+
+    changes = []
 
     if "role" in data:
         role = Role.query.filter_by(name=data["role"]).first()
         if not role:
             return jsonify({"error": f"Role '{data['role']}' does not exist"}), 400
-        user.role = role
+        user.roles = [role]
+        changes.append("role")
 
     if "is_active" in data:
         user.is_active = bool(data["is_active"])
+        changes.append("active")
     if "email" in data and data["email"]:
         existing = User.query.filter_by(email=data["email"]).first()
         if existing and existing.id != user_id:
             return jsonify({"error": "Email already in use"}), 409
         user.email = data["email"]
+        changes.append("email")
     if "password" in data and data["password"]:
         user.set_password(data["password"])
+        changes.append("password")
 
     db.session.commit()
+    Log.info(
+        f"Following user fields are updated for the user `{user.username}`: {', '.join(changes)}",
+        current_user.id,
+    )
     return jsonify(user.to_dict())
 
 
 @api.route("/users/<int:user_id>", methods=["DELETE"])
 @admin_required
 def delete_user(user_id):
-    # Prevent self-deletion
     current_user_id = get_jwt_identity()
+    # Prevent self-deletion
     if user_id == current_user_id:
         return jsonify({"error": "You cannot delete your own account"}), 400
 
     user = User.query.get_or_404(user_id)
     db.session.delete(user)
     db.session.commit()
+    Log.warn(f"User `{user.username}` deleted", current_user_id)
     return jsonify({"message": f"User '{user.username}' deleted successfully"})
 
 
