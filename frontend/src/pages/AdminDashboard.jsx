@@ -120,7 +120,9 @@ const AdminDashboard = () => {
     if (window.confirm(`Are you sure you want to delete '${username}'?`)) {
       await api.deleteUser(id);
       setUsers(users.filter(u => u.id !== id));
-      setStats(prev => ({ ...prev, total_users: prev.total_users - 1 }));
+        const statsData = await api.getStats();
+        setStats(statsData);
+      // setStats(prev => ({ ...prev, total_users: prev.total_users - 1 }));
     }
   };
 
@@ -685,6 +687,19 @@ const AdminDashboard = () => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M12 4v16m8-8H4" />
                 </svg>
                 Add User
+              </button>
+            )}
+
+            {activeTab === 'logs' && (
+              <button className="btn-primary" onClick={async () => {
+                const logsData = await api.getLogs();
+                setLogs(logsData);
+              }}>
+                <svg viewBox="0 0 24 24" style={{ width: '16px', height: '16px', stroke: 'currentColor', fill: 'none', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' }}>
+                  <polyline points="23 4 23 10 17 10" />
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                </svg>
+                refresh
               </button>
             )}
           </div>
